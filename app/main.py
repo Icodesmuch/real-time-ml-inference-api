@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+from app.models.inference import load_model, predict as model_predict
 
 
 app = FastAPI()
@@ -15,6 +17,16 @@ class PredictionResponse(BaseModel):
     prediction: float
     model_version: str
 
+
+@app.on_event("startup")
+def startup():
+    """Optionally load model at startup (e.g. after downloading from S3)."""
+    try:
+        load_model()
+    except FileNotFoundError:
+        pass  # Model will be loaded on first /predict or after S3 download
+
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
@@ -22,8 +34,14 @@ def health_check():
 
 @app.post("/predict")
 def predict(request: PredictionRequest) -> PredictionResponse:
-    return PredictionResponse(
-        user_id=request.user_id,
-        prediction=0.5,
-        model_version="1.0"
-    )
+    try:
+        prediction, model_version = model_predict(request.context)
+        return PredictionResponse(
+            user_id=request.user_id,
+            prediction=prediction,
+            model_version=model_version,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
